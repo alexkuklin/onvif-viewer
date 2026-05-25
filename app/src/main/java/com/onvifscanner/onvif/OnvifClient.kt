@@ -18,13 +18,40 @@ import java.util.regex.Pattern
 
 class OnvifClient {
 
+    companion object {
+        val COMMON_ONVIF_PORTS = listOf(80, 8080, 8000, 1000, 8899, 554)
+    }
+
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .writeTimeout(5, TimeUnit.SECONDS)
         .build()
 
     private val soapMediaType = "application/soap+xml; charset=utf-8".toMediaType()
+
+    var triedPorts: String = ""
+        private set
+
+    // Try to find working port for device
+    suspend fun findWorkingPort(device: OnvifDevice): OnvifDevice? = withContext(Dispatchers.IO) {
+        // First try the discovered port
+        val portsToTry = listOf(device.port) + COMMON_ONVIF_PORTS.filter { it != device.port }
+        val errors = mutableListOf<String>()
+
+        for (port in portsToTry) {
+            val testDevice = device.copy(port = port)
+            val result = getDeviceInformation(testDevice)
+            if (result != null) {
+                triedPorts = "Found on port $port"
+                return@withContext result.copy(port = port)
+            }
+            errors.add("$port: ${lastError ?: "failed"}")
+        }
+        triedPorts = errors.joinToString("; ")
+        lastError = "Tried ports: $triedPorts"
+        null
+    }
 
     suspend fun getDeviceInformation(device: OnvifDevice): OnvifDevice? = withContext(Dispatchers.IO) {
         val soapBody = """
@@ -91,6 +118,9 @@ class OnvifClient {
         result != null
     }
 
+    var lastError: String? = null
+        private set
+
     private fun sendSoapRequest(device: OnvifDevice, body: String, serviceUrl: String? = null): String? {
         val url = serviceUrl ?: device.serviceUrl
         val envelope = buildSoapEnvelope(body, device.credentials)
@@ -104,31 +134,33 @@ class OnvifClient {
         return try {
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
+                    lastError = null
                     response.body?.string()
                 } else {
+                    lastError = "HTTP ${response.code}: ${response.message} from $url"
                     null
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            lastError = "${e.javaClass.simpleName}: ${e.message} for $url"
             null
         }
     }
 
     private fun buildSoapEnvelope(body: String, credentials: Credentials?): String {
-        val securityHeader = credentials?.let { buildSecurityHeader(it) } ?: ""
-
-        return """<?xml version="1.0" encoding="UTF-8"?>
-<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"
-               xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
-               xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
-    <soap:Header>
-        $securityHeader
-    </soap:Header>
-    <soap:Body>
-        $body
-    </soap:Body>
+        return if (credentials != null) {
+            val securityHeader = buildSecurityHeader(credentials)
+            """<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+<soap:Header>$securityHeader</soap:Header>
+<soap:Body>$body</soap:Body>
 </soap:Envelope>"""
+        } else {
+            """<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+<soap:Body>$body</soap:Body>
+</soap:Envelope>"""
+        }
     }
 
     private fun buildSecurityHeader(credentials: Credentials): String {

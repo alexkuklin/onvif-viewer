@@ -20,6 +20,7 @@ data class CameraUiState(
     val selectedCamera: CameraState? = null,
     val showCredentialsDialog: Boolean = false,
     val credentialsDialogCameraId: String? = null,
+    val showAddCameraDialog: Boolean = false,
     val error: String? = null
 )
 
@@ -97,7 +98,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val camera = _uiState.value.cameras.find { it.device.id == deviceId } ?: return@launch
             val device = camera.device
 
-            // Check for saved credentials first
+            // First try without auth - some cameras don't require it
+            // Also try different ports in case WS-Discovery reported wrong one
+            val noAuthResult = client.findWorkingPort(device)
+            if (noAuthResult != null) {
+                // No auth needed! Update with correct port
+                updateCameraState(deviceId) { cam ->
+                    cam.copy(
+                        device = noAuthResult.copy(isAuthenticated = true),
+                        authStatus = AuthStatus.AUTHENTICATED
+                    )
+                }
+                // Get profiles using correct port
+                val profiles = client.getProfiles(noAuthResult)
+                if (profiles.isNotEmpty()) {
+                    updateCameraState(deviceId) { it.copy(device = it.device.copy(profiles = profiles)) }
+                }
+                return@launch
+            }
+
+            // Check for saved credentials
             val savedCredentials = passwordManager.getSavedCredentials(deviceId)
             if (savedCredentials != null) {
                 if (client.authenticate(device, savedCredentials)) {
@@ -107,7 +127,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             // Get MAC address for vendor matching
-            val macAddress = client.getNetworkInterfaces(device) ?: ""
+            val macAddress = client.getNetworkInterfaces(device.copy(credentials = Credentials("admin", "admin"))) ?: ""
 
             // Try credentials from password file
             val credentialsToTry = passwordManager.getCredentialsToTry(macAddress)
@@ -118,11 +138,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
-            // All failed - need user input
-            updateCameraState(deviceId) { it.copy(authStatus = AuthStatus.NEEDS_CREDENTIALS) }
+            // All failed - show error with details
+            val errorDetail = client.lastError ?: "Unknown error"
+            updateCameraState(deviceId) { it.copy(authStatus = AuthStatus.FAILED) }
             _uiState.value = _uiState.value.copy(
-                showCredentialsDialog = true,
-                credentialsDialogCameraId = deviceId
+                error = "Auth failed for ${device.address}: $errorDetail"
             )
         }
     }
@@ -233,6 +253,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             showCredentialsDialog = true,
             credentialsDialogCameraId = deviceId
         )
+    }
+
+    fun showAddCameraDialog() {
+        _uiState.value = _uiState.value.copy(showAddCameraDialog = true)
+    }
+
+    fun dismissAddCameraDialog() {
+        _uiState.value = _uiState.value.copy(showAddCameraDialog = false)
+    }
+
+    fun addCameraManually(ipAddress: String, port: Int) {
+        _uiState.value = _uiState.value.copy(showAddCameraDialog = false)
+
+        val deviceId = "$ipAddress:$port"
+        val device = OnvifDevice(
+            id = deviceId,
+            address = ipAddress,
+            port = port
+        )
+
+        val nextIndex = (_uiState.value.cameras.maxOfOrNull { it.index } ?: 0) + 1
+        val cameraState = CameraState(device = device, index = nextIndex)
+
+        _uiState.value = _uiState.value.copy(
+            cameras = _uiState.value.cameras + cameraState
+        )
+
+        // Authenticate the new camera
+        authenticateCamera(deviceId)
     }
 
     private fun updateCameraState(deviceId: String, update: (CameraState) -> CameraState) {

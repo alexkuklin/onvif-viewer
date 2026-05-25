@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -18,6 +19,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -32,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.onvifscanner.ui.components.AddCameraDialog
 import com.onvifscanner.ui.components.CameraCard
 import com.onvifscanner.ui.components.CredentialsDialog
 import com.onvifscanner.viewmodel.CameraUiState
@@ -69,15 +72,30 @@ fun CameraListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.scanForCameras() },
-                containerColor = MaterialTheme.colorScheme.primary
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Scan",
-                    tint = MaterialTheme.colorScheme.onPrimary
-                )
+                SmallFloatingActionButton(
+                    onClick = { viewModel.showAddCameraDialog() },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add manually",
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+                FloatingActionButton(
+                    onClick = { viewModel.scanForCameras() },
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Scan",
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
             }
         },
         snackbarHost = {
@@ -109,6 +127,16 @@ fun CameraListScreen(
                     }
                 )
             }
+        }
+
+        // Add camera dialog
+        if (uiState.showAddCameraDialog) {
+            AddCameraDialog(
+                onDismiss = { viewModel.dismissAddCameraDialog() },
+                onAdd = { ip, port ->
+                    viewModel.addCameraManually(ip, port)
+                }
+            )
         }
     }
 }
